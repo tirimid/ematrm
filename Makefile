@@ -1,3 +1,5 @@
+.PHONY: all clean install uninstall
+
 CPP := g++
 CPPFLAGS := -std=c++20 -pedantic
 INSTBIN := /usr/bin/ematrm

@@ -69,6 +69,18 @@ enum token_type {
 	TT_IND_SUB,
 	TT_IND_MUL,
 	TT_IND_DIV,
+	TT_POP_JMP,
+	TT_POP_JMP_COND,
+	TT_PUSH_JMP,
+	TT_SAVE_JMP,
+	TT_EQUAL,
+	TT_GREQUAL,
+	TT_GREATER,
+	TT_LESS,
+	TT_LEQUAL,
+	TT_AND,
+	TT_OR,
+	TT_NOT,
 };
 
 enum op_mode {
@@ -104,7 +116,7 @@ struct machine {
 	bool rev;
 	
 	std::stack<token> atoms;
-	std::stack<size_t> jumps;
+	std::stack<long> jumps;
 };
 
 static void err(std::string const &msg);
@@ -144,7 +156,7 @@ main(int argc, char const *argv[])
 		.mode = OM_ROW,
 		.rev = false,
 		.atoms = std::stack<token>{},
-		.jumps = std::stack<size_t>{},
+		.jumps = std::stack<long>{},
 	};
 	while (machine.instr_ptr < code->size())
 		exec_cycle(machine, *code);
@@ -437,6 +449,64 @@ lex(std::string const &src)
 				prog_err(line, "invalid register index operator!");
 				return std::nullopt;
 			}
+			break;
+		case 'j':
+			if (++i == src.length()) {
+				prog_err(line, "expected jump stack operator after 'j'!");
+				return std::nullopt;
+			}
+			switch (src[i]) {
+			case '>':
+				type = TT_POP_JMP;
+				break;
+			case '?':
+				type = TT_POP_JMP_COND;
+				break;
+			case '<':
+				type = TT_PUSH_JMP;
+				break;
+			default:
+				prog_err(line, "invalid jump stack operator!");
+				return std::nullopt;
+			}
+			break;
+		case '.':
+			type = TT_SAVE_JMP;
+			break;
+		case '=':
+			type = TT_EQUAL;
+			break;
+		case 'F':
+			type = TT_GREQUAL;
+			break;
+		case 'G':
+			type = TT_GREATER;
+			break;
+		case 'L':
+			type = TT_LESS;
+			break;
+		case 'M':
+			type = TT_LEQUAL;
+			break;
+		case '&':
+			type = TT_AND;
+			break;
+		case '?':
+			if (++i == src.length()) {
+				prog_err(line, "expected '|' after '?'!");
+				break;
+			}
+			switch (src[i]) {
+			case '|':
+				type = TT_OR;
+				break;
+			default:
+				prog_err(line, "invalid boolean operator!");
+				return std::nullopt;
+			}
+			break;
+		case '!':
+			type = TT_NOT;
 			break;
 			
 		default:
@@ -793,6 +863,176 @@ exec_cycle(machine &machine, std::vector<token> const &code)
 			++ind;
 		};
 		for_each_reg(machine, ind_div);
+		break;
+	}
+	case TT_POP_JMP: {
+		if (!machine.jumps.size())
+			break;
+		
+		long jmp = machine.jumps.top();
+		machine.jumps.pop();
+		if (jmp < 0 || jmp >= code.size())
+			break;
+		
+		machine.instr_ptr = jmp;
+		
+		break;
+	}
+	case TT_POP_JMP_COND: {
+		if (!machine.jumps.size() || !machine.atoms.size())
+			break;
+		
+		long jmp = machine.jumps.top();
+		long cond = atoi(machine.atoms.top().data.c_str());
+		machine.jumps.pop();
+		machine.atoms.pop();
+		if (jmp < 0 || jmp >= code.size())
+			break;
+		
+		if (cond)
+			machine.instr_ptr = jmp;
+		
+		break;
+	}
+	case TT_PUSH_JMP: {
+		auto push_jmp = [&](reg &reg, size_t num) {
+			if (reg.type == RT_INT)
+				machine.jumps.push(reg.data.num);
+		};
+		for_each_reg(machine, push_jmp);
+		break;
+	}
+	case TT_SAVE_JMP:
+		// needs to be subtracted by 1 in order do account for `++`.
+		machine.jumps.push(machine.instr_ptr - 1);
+		break;
+	case TT_EQUAL: {
+		if (!machine.atoms.size())
+			break;
+		
+		token tok = machine.atoms.top();
+		machine.atoms.pop();
+		
+		auto equal = [&](reg &reg, size_t num) {
+			if (tok.type == TT_LIT_NUM && reg.type == RT_INT) {
+				long val = atoi(tok.data.c_str());
+				reg.data.num = reg.data.num == val;
+			} else if (tok.type == TT_LIT_STR && reg.type == RT_STR) {
+				char buf[REG_STR_SIZE + 1] = {0};
+				strncpy(buf, reg.data.str, REG_STR_SIZE);
+				reg.type = RT_INT;
+				reg.data.num = !strcmp(buf, tok.data.c_str());
+			}
+		};
+		
+		for_each_reg(machine, equal);
+		
+		break;
+	}
+	case TT_GREQUAL: {
+		if (!machine.atoms.size())
+			break;
+		
+		long val = atoi(machine.atoms.top().data.c_str());
+		machine.atoms.pop();
+		
+		auto grequal = [&](reg &reg, size_t num) {
+			if (reg.type == RT_INT)
+				reg.data.num = reg.data.num >= val;
+		};
+		
+		for_each_reg(machine, grequal);
+		
+		break;
+	}
+	case TT_GREATER: {
+		if (!machine.atoms.size())
+			break;
+		
+		long val = atoi(machine.atoms.top().data.c_str());
+		machine.atoms.pop();
+		
+		auto greater = [&](reg &reg, size_t num) {
+			if (reg.type == RT_INT)
+				reg.data.num = reg.data.num > val;
+		};
+		
+		for_each_reg(machine, greater);
+		
+		break;
+	}
+	case TT_LESS: {
+		if (!machine.atoms.size())
+			break;
+		
+		long val = atoi(machine.atoms.top().data.c_str());
+		machine.atoms.pop();
+		
+		auto less = [&](reg &reg, size_t num) {
+			if (reg.type == RT_INT)
+				reg.data.num = reg.data.num < val;
+		};
+		
+		for_each_reg(machine, less);
+		
+		break;
+	}
+	case TT_LEQUAL: {
+		if (!machine.atoms.size())
+			break;
+		
+		long val = atoi(machine.atoms.top().data.c_str());
+		machine.atoms.pop();
+		
+		auto lequal = [&](reg &reg, size_t num) {
+			if (reg.type == RT_INT)
+				reg.data.num = reg.data.num <= val;
+		};
+		
+		for_each_reg(machine, lequal);
+		
+		break;
+	}
+	case TT_AND: {
+		bool all_set = true;
+		auto and_ = [&](reg &reg, size_t num) {
+			if (reg.type == RT_INT && !reg.data.num)
+				all_set = false;
+		};
+		for_each_reg(machine, and_);
+		
+		token tok = {
+			.type = TT_LIT_NUM,
+			.data = all_set ? "1" : "0",
+			.line = -1,
+		};
+		machine.atoms.push(tok);
+		
+		break;
+	}
+	case TT_OR: {
+		bool any_set = false;
+		auto or_ = [&](reg &reg, size_t num) {
+			if (reg.type == RT_INT && reg.data.num)
+				any_set = true;
+		};
+		for_each_reg(machine, or_);
+		
+		token tok = {
+			.type = TT_LIT_NUM,
+			.data = any_set ? "1" : "0",
+			.line = -1,
+		};
+		machine.atoms.push(tok);
+		
+		break;
+	}
+	case TT_NOT: {
+		auto not_ = [&](reg &reg, size_t num) {
+			if (reg.type == RT_INT)
+				reg.data.num = !reg.data.num;
+		};
+		for_each_reg(machine, not_);
 		break;
 	}
 		
